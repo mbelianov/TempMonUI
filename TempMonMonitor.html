@@ -70,15 +70,13 @@
 		
 		<script type="text/javascript">
 			AWS.config.update({region: "us-east-1", dynamoDbCrc32: false});
-			AWS.config.update({accessKeyId: '', secretAccessKey: ''});
-//		AWS.config.credentials = new AWS.CognitoIdentityCredentials({IdentityPoolId: 'us-east-1:7869ba13-aaf4-43fb-9877-5cf51ffeba0a'});	
+//			AWS.config.update({accessKeyId: '', secretAccessKey: ''});
+			const identityPoolId = "us-east-1:7869ba13-aaf4-43fb-9877-5cf51ffeba0a";
+			AWS.config.credentials = new AWS.CognitoIdentityCredentials({IdentityPoolId: identityPoolId });	
 			var credentials = AWS.config.credentials;
-//			const identityPoolId = "us-east-1:7869ba13-aaf4-43fb-9877-5cf51ffeba0a";
-//			const poolData = {
-//					UserPoolId 	: "us-east-1_Cqcxr5nQr", // Your user pool id here
-//					ClientId 	: "1gc43j0m2ct9uvfua22i6u1gug" // Your client id here
-//				};
-//			const userPool = new AmazonCognitoIdentity.CognitoUserPool(poolData);
+			AWS.config.credentials.get(function(){
+				setUpMQTTConnection();
+			});
 
 			var iot = new AWS.Iot({endpoint:"iot.us-east-1.amazonaws.com"});
 			var iotData = new AWS.IotData({endpoint: "a1jkex5rueqh0y-ats.iot.us-east-1.amazonaws.com"});
@@ -421,7 +419,7 @@
 			window.onload = function() {
 				setInterval(clock, clockRefreshInterval * 1000);
 				sensorSet = {sensors:[]};
-				setUpMQTTConnection();
+				//setUpMQTTConnection();
 				updateGlobalIndicators();
 			};
 
