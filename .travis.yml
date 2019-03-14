@@ -5,7 +5,8 @@ deploy:
   provider: s3
   access_key_id: $AWS_ACCESS_KEY_ID
   secret_access_key: $AWS_SECRET_ACCESS_KEY
-  bucket: tempmon.arabadjikova.com
+  bucket: lozen.arabadjikova.com
+  upload-dir: tempmon
   acl: public_read
   on:
     repo: mbelianov/TempMonUI
