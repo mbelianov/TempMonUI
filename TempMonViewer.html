@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+		
+		<script src="https://sdk.amazonaws.com/js/aws-sdk-2.203.0.min.js"></script>
+		<script src="http://lozen.arabadjikova.com/tempmon/js/SigV4Utils.js"></script>
+		
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.13.0/moment.min.js"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.5.0/Chart.min.js"></script>
+		<script src='https://npmcdn.com/Chart.Zoom.js@latest/Chart.Zoom.min.js'></script>		
+		
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.2/mqttws31.min.js" type="text/javascript"></script>
+		
+		<script src="https://code.jquery.com/jquery-3.3.1.slim.min.js" integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo" crossorigin="anonymous"></script>
+		
+		<script src="https://stackpath.bootstrapcdn.com/bootstrap/4.1.1/js/bootstrap.min.js" integrity="sha384-smHYKdLADwkXOn1EmN1qk/HfnUcbVRZyYmZ4qpPea6sjB/pTJ0euyQp0Mk8ck+5T" crossorigin="anonymous"></script>		
+		<link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.1.1/css/bootstrap.min.css" integrity="sha384-WskhaSGFgHYWDcbwN70/dfYBj47jz9qbsMId/iRN3ewGhXQFZCSftd1LZCfmhktB" crossorigin="anonymous">
+		<!--<script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.3/umd/popper.min.js" integrity="sha384-ZMP7rVo3mIykV+2+9J3UJ46jBk0WLaUAdn689aCwoqbBJiSnjAK/l8WvCWPIPm49" crossorigin="anonymous"></script>--> 
+		
+		
+		<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+		
+		<script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/mouse0270-bootstrap-notify/3.1.5/bootstrap-notify.min.js"></script>
+		<link href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/3.2.3/animate.min.css" rel="stylesheet"> 		
+		
+		<style>
+			.alert-minimalist {
+				background-color: rgba(241, 242, 240, 0.85);
+				border-color: rgba(149, 149, 149, 0.3);
+				border-radius: 3px;
+				color: rgb(149, 149, 149);
+				padding: 2px;
+				width: 80px;
+				text-align: center;
+				
+			}
+			.alert-minimalist > [data-notify="icon"] {
+
+			}
+			.alert-minimalist > [data-notify="title"] {
+				color: rgb(51, 51, 51);
+				font-weight: bold;
+
+			}
+			.alert-minimalist > [data-notify="message"] {
+				font-size: 100%;
+			}
+
+
+		</style>
+		
+		<script type="text/javascript">
+			AWS.config.update({region: "us-east-1", dynamoDbCrc32: false});
+			const identityPoolId = "us-east-1:7869ba13-aaf4-43fb-9877-5cf51ffeba0a";
+			AWS.config.credentials = new AWS.CognitoIdentityCredentials({IdentityPoolId: identityPoolId });	
+			var credentials = AWS.config.credentials;
+			AWS.config.credentials.get(function(){
+				setUpMQTTConnection();
+			});
+
+			var iot = new AWS.Iot({endpoint:"iot.us-east-1.amazonaws.com"});
+			var iotData = new AWS.IotData({endpoint: "a1jkex5rueqh0y-ats.iot.us-east-1.amazonaws.com"});
+			var sensorSet = {sensors:[]};
+			var client; //MQTT client
+			var mqttClientId = "TempMonMonitor_"+Math.random().toString(36).substring(2,7);
+			var remainToLoad = -1; 	//due to async nature of the communication we need to know if initial load of sensor is completed 
+									//before updating sensorSet with new sensors.
+			var charts = {};
+			
+			function getListOfThingsFromGroup(next) {
+
+				var params = {
+					  thingGroupName: 'Environment_Monitor',
+					  //attributeValue: '',
+					  maxResults: 25,
+					  nextToken: next,
+					  recursive: true
+				};
+			
+				console.log("Querying things...");
+			
+				iot.listThingsInThingGroup(params, function (err, data){
+					if (err) {
+						alert ("something went wrong. Pls restart your browser.");
+						console.debug(err, err.stack);
+					} else {
+						console.debug("Received data object: ", data);
+						if (remainToLoad < 0) remainToLoad = data.things.length;
+						else remainToLoad += data.things.length;
+							
+						data.things.forEach(function(thing) {
+								var sensor;
+//								sensor = sensorSet.sensors.find(function (sensor){
+//										return sensor.name == thing;
+//									});
+//								if (sensor == null)
+								{
+									sensor = {
+										name: thing,
+										battery: null,
+										shadowTopic: "$aws/things/"+thing+"/shadow/update/documents",
+										topic: null,
+										temperature: null,
+										rssi: null,
+									};
+									sensorSet.sensors.push(sensor);
+								}
+								//var params = {};
+								console.log("Querying shadow data for ", thing);
+								iotData.getThingShadow({thingName:thing}, function (err, data) {
+									if (err) {
+										alert ("something went wrong. Pls restart your browser.");
+										console.debug(err, err.stack); // an error occurred
+									} else  {
+										var shadow = JSON.parse(data.payload);
+										console.log("Got shadow data: " , shadow);
+										sensor.battery = shadow.state.reported.battery;
+										sensor.topic = shadow.state.reported.topic;
+										sensor.rssi = shadow.state.reported.rxlev;
+										getSensorDataFromDB(sensor);
+										remainToLoad--;
+										console.debug("RemainToLoad:", remainToLoad);
+									}
+								});
+							});
+
+						if (data.nextToken) {
+							getListOfThingsFromGroup(data.nextToken);
+						} else{
+							console.log("SensroSet result:", sensorSet);
+							$.notifyClose();
+							clock = $.notify({
+											  message: "clock"
+											},{
+											  type: 'minimalist',
+											  allow_dismiss: false,
+											  delay: 0,
+											  placement: {
+												from: "bottom",
+												align: "right"
+											  },
+											  //onShow: alert("shown")
+											});
+							//dragElement()				
+							createViewCharts();
+
+						}
+					}	
+				});
+			}
+			
+			function updateSensorSet(newSensor){
+				if (remainToLoad == 0){ //due to async nature of the communication we need to know if initial load of sensor is completed 
+										//before updating sensorSet with new sensors.
+					var sensor = {
+						name: newSensor.current.state.reported.sensor,
+						battery: newSensor.current.state.reported.battery,
+						shadowTopic: "$aws/things/"+newSensor.current.state.reported.sensor+"/shadow/update/documents",
+						topic: newSensor.current.state.reported.topic,
+						temperature: null,
+						rssi: newSensor.current.state.reported.rssi,
+					};
+					sensorSet.sensors.push(sensor);					
+					
+				}
+			}
+			
+			var mqttConnectOptions = {
+				onSuccess: function(){
+					console.log("MQTT connection success. MQTT client id: ", mqttClientId); // connect succeeded
+					
+					$.notify({message: "Connected to AWS IoT Core!"	});
+					if (sensorSet.sensors.length == 0)
+						getListOfThingsFromGroup(null);
+					client.subscribe("+/+/Temperature");
+					client.subscribe("$aws/things/+/shadow/update/documents");
+				},
+				useSSL: true,
+				timeout: 15,
+				mqttVersion: 4,
+				onFailure: function(responseObject) {
+					console.log("MQTT connection fail: "+responseObject.errorMessage);
+					console.log("Will try again in 10 sec");
+					setTimeout( setUpMQTTConnection(), 8000); 
+				}
+			};	
+				
+			function onMQTTConnectionLost(responseObject) {
+				console.log("MQTT Connection Lost: "+responseObject.errorMessage);
+				var notify = $.notify({
+					  message: "Connection lost!"
+					},{
+					  type: 'warning',
+					});
+				
+				if (responseObject.errorCode == 0 ) {
+					//disconnect on purpose. do not reconnect.
+					console.log("terminating...");
+					return;
+				}
+				setTimeout(function(){
+						console.log("Trying to reconnect...");
+						setUpMQTTConnection();
+					}, 3000);	
+			};	
+
+			function onMessageArrived(message){
+					console.log("msg arrived: [" + message.destinationName + "] " +  message.payloadString);
+					try {
+						var payload = JSON.parse(message.payloadString);
+						if (message.destinationName.charAt(0) == "$"){
+							var sensor = sensorSet.sensors.find(function(sensor){
+									return (message.destinationName == sensor.shadowTopic)
+								});
+								
+							if (sensor)	{
+									sensor.battery = payload.current.state.reported.battery;
+							}
+							else{
+								updateSensorSet(payload);
+							}
+						}
+						else {
+							var sensor = sensorSet.sensors.find(function(sensor){
+									return (payload.sensor == sensor.name)
+								});
+							if (sensor){
+								sensor.temperature = payload.temperature;
+								charts[sensor.name].data.datasets[0].data.push({x:moment(new Date().getTime()).toDate(), y:sensor.temperature});								
+//								charts[sensor.name].data.labels.push(moment(new Date().getTime()).toDate());
+//								charts[sensor.name].data.datasets[0].data.push(sensor.temperature);
+								charts[sensor.name].options.scales.xAxes[0].time.max = moment(new Date().getTime() + 1000*3600*1).toDate();
+								charts[sensor.name].update();
+							} 
+						} 
+					}
+					catch (e) {
+						console.log("error! " + e);
+					}	
+			}
+			
+			function createViewCharts(){
+				  $("#viewConteiner").empty();
+				  Chart.defaults.global.legend.display = false;
+
+				  for(var i=0 ; i < sensorSet.sensors.length ; i++) {
+					$('<div class="row border">'+
+							'<div class="col-10 col-md-2 order-1 d-inline-block text-truncate text-center align-self-center">'+
+								'<p id="sensor'+i+'">sensor</p>'+
+								'<h1 id="gauge'+i+'">-- &degC</h1>'+
+							'</div>'+
+							'<canvas id="chart'+i+'" class="order-3 col-md-9 order-md-2"></canvas>'+
+							'<div class="col-2 order-2 col-md-1 order-md-3">'+
+								'<i id="signal-indicator'+i+'"></i> <i id="battery-indicator'+i+'" title=""></i><i id="link-indicator'+i+' class="fa fa-unlink"></i>'+
+							'</div>'+
+						'</div>').appendTo('#viewContainer');
+
+					var chart = new Chart($("#chart"+i), {
+															type: 'scatter',
+															data: {
+																labels: [],
+																datasets: [{
+																	data: [],
+																	borderColor: '#0000ff',
+																	borderWidth: 1,
+																	fill: false,
+																	pointRadius: 1,
+																	pointHitRadius: 4
+																}]
+															},
+															options: {
+																title:	{
+																	display: true,
+																	text: sensorSet.sensors[i].topic,
+																},
+																scales: {
+																	yAxes: [{
+																		ticks: {
+																			beginAtZero:true
+																		}
+																	}],
+																	xAxes: [{
+																		type: 'time',
+																		display: true,
+																		time: {
+																			displayFormats:{
+																				hour: ' DD MMM HH:mm '
+																			},
+																			min: moment(new Date().getTime() - 1000*3600*24*7).toDate(),
+																			max: moment(new Date().getTime() + 1000*3600*1).toDate()																				
+																		}
+															
+																	}]
+																}
+															}
+														});
+					charts[sensorSet.sensors[i].name] = chart;
+				  }			
+			}
+			
+			function setUpMQTTConnection(){
+				client = new Paho.MQTT.Client(SigV4Utils.getSignedUrl (iotData.config.endpoint, AWS.config.region, credentials), mqttClientId);	
+				client.onConnectionLost = onMQTTConnectionLost;			
+				client.onMessageArrived = onMessageArrived;
+				client.connect(mqttConnectOptions);			
+			}
+			
+			function updateInterface(){
+			
+				for (var i = 0; i < sensorSet.sensors.length; i++){
+					$("#battery-indicator"+i).attr("title", sensorSet.sensors[i].battery/1000 + " V");
+					if (sensorSet.sensors[i].battery > 2900)
+						$("#battery-indicator"+i).removeClass().addClass("fa fa-battery-full");
+					else if (sensorSet.sensors[i].battery > 2800)
+						$("#battery-indicator"+i).removeClass().addClass("fa fa-battery-three-quarters");
+					else if (sensorSet.sensors[i].battery > 2700)
+						$("#battery-indicator"+i).removeClass().addClass("fa fa-battery-half");
+					else if (sensorSet.sensors[i].battery > 2600)
+						$("#battery-indicator"+i).removeClass().addClass("fa fa-battery-quarter");
+					else if (sensorSet.sensors[i].battery > 2500)
+						$("#battery-indicator"+i).removeClass().addClass("fa fa-battery-empty");
+					else
+						$("#battery-indicator"+i).removeClass().addClass("fa fa-battery-empty");
+
+					if (sensorSet.sensors[i].rssi > -60)
+						$("#signal-indicator"+i).removeClass().addClass("fa fa-wifi").text("6");
+					else if (sensorSet.sensors[i].rssi > -70)
+						$("#signal-indicator"+i).removeClass().addClass("fa fa-wifi").text("5");
+					else if (sensorSet.sensors[i].rssi > -80)
+						$("#signal-indicator"+i).removeClass().addClass("fa fa-wifi").text("4");
+					else if (sensorSet.sensors[i].rssi > -90)
+						$("#signal-indicator"+i).removeClass().addClass("fa fa-wifi").text("3");
+					else if (sensorSet.sensors[i].rssi > -100)
+						$("#signal-indicator"+i).removeClass().addClass("fa fa-wifi").text("2");
+					else
+						$("#signal-indicator"+i).removeClass().addClass("fa fa-wifi").text("0");						
+					
+					$("#sensor"+i).text(sensorSet.sensors[i].name);
+					$("#gauge"+i).html(sensorSet.sensors[i].temperature + " &degC");
+					
+					if (charts[sensorSet.sensors[i].name].options.title.text != sensorSet.sensors[i].topic)
+					{
+						charts[sensorSet.sensors[i].name].options.title.text = sensorSet.sensors[i].topic;
+						charts[sensorSet.sensors[i].name].update();
+					}
+				}
+	
+					
+
+				setTimeout(updateInterface, 5000);
+			}
+			
+			function getSensorDataFromDB(sensor){
+				var docClient = new AWS.DynamoDB.DocumentClient({endpoint: 'http://dynamodb.us-east-1.amazonaws.com'});
+
+				{
+					var q = {
+						TableName : "iot_dynamodb",
+						ProjectionExpression: "#ts, topic, payload",
+						KeyConditionExpression: "topic = :topic and #ts between :start_ts and :end_ts",
+						ExpressionAttributeNames:{
+								"#ts": "timestamp"
+							},
+						ExpressionAttributeValues: {
+								":topic": sensor.topic,
+								":start_ts": new Date().getTime() - 1000*3600*24*7,
+								":end_ts": new Date().getTime(),
+							}
+						};
+					
+					console.log("Querying data for topic: ", sensor.topic);
+					console.debug("[queryData:query]", q);		
+					docClient.query(q, function(err, data) {
+						if (err) {
+							console.log(err, err.stack);
+						} 
+						else {
+							console.log("Received data: ", data);
+							data.Items.forEach(function(item){
+								if (item.payload.sensor == sensor.name){
+									//if (sensor.temperature == null)
+										sensor.temperature = item.payload.temperature;
+									charts[sensor.name].data.datasets[0].data.push({x:moment(item.timestamp).toDate(), y:item.payload.temperature});
+//									charts[sensor.name].data.labels.push(moment(item.timestamp).toDate());
+//									charts[sensor.name].data.datasets[0].data.push(item.payload.temperature);
+								}
+								
+							});
+							//make start and end of all chartes the same
+							//charts[sensor.name].data.datasets[0].data.push({x:moment(new Date().getTime()).toDate()});
+							//charts[sensor.name].data.labels.push(moment(new Date().getTime()).toDate());
+							//charts[sensor.name].data.labels.push(moment(new Date().getTime() - 1000*3600*24*7).toDate());
+							charts[sensor.name].update();
+						}
+					});
+					
+					
+				};
+			}
+			
+			var clock;
+			function clockF() {// We create a new Date object and assign it to a variable called "time".
+				var time = new Date(),
+					
+					// Access the "getHours" method on the Date object with the dot accessor.
+					hours = time.getHours(),
+					
+					// Access the "getMinutes" method with the dot accessor.
+					minutes = time.getMinutes(),
+					
+					seconds = time.getSeconds();
+
+				if (clock)
+					clock.update('message', (harold(hours) + ":" + harold(minutes) + ":" + harold(seconds)));
+				  
+				  function harold(standIn) {
+					if (standIn < 10) {
+					  standIn = '0' + standIn
+					}
+					return standIn;
+				  }
+			}			
+			
+			function dragElement(elmnt) {
+			  var pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+			  var elmnt = clock.$ele[0];
+
+				/* otherwise, move the DIV from anywhere inside the DIV:*/
+				elmnt.onmousedown = dragMouseDown;
+			  
+
+			  function dragMouseDown(e) {
+				e = e || window.event;
+				// get the mouse cursor position at startup:
+				pos3 = e.clientX;
+				pos4 = e.clientY;
+				document.onmouseup = closeDragElement;
+				// call a function whenever the cursor moves:
+				document.onmousemove = elementDrag;
+			  }
+
+			  function elementDrag(e) {
+				e = e || window.event;
+				// calculate the new cursor position:
+				pos1 = pos3 - e.clientX;
+				pos2 = pos4 - e.clientY;
+				pos3 = e.clientX;
+				pos4 = e.clientY;
+				// set the element's new position:
+				elmnt.style.top = (elmnt.offsetTop - pos2) + "px";
+				elmnt.style.left = (elmnt.offsetLeft - pos1) + "px";
+			  }
+
+			  function closeDragElement() {
+				/* stop moving when mouse button is released:*/
+				document.onmouseup = null;
+				document.onmousemove = null;
+			  }
+			}
+  
+			
+			window.onload = function() {
+				$.notifyDefaults({					    
+
+									placement: {
+										from: "top",
+										align: "center"
+									}
+								});
+				
+				$.notify({message: "Setting up the scene. Please be patient..."});	
+				//$( document ).tooltip();
+				setInterval(clockF, 1000);
+				sensorSet = {sensors:[]};
+				//setUpMQTTConnection();
+				updateInterface();				
+			};
+
+	
+		</script>
+	</head>
+	<body>
+		<div id="viewContainer" class="container bg-light"></div>
+	</body>
+</html>
